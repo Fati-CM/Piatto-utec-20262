@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Piatto UTEC serverless backend
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures: [arm64]
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        ORDERS_TABLE: !Ref OrdersTable
+        HOLDS_TABLE: !Ref HoldsTable
+
+Resources:
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: piatto-users
+      UsernameAttributes: [email]
+      AutoVerifiedAttributes: [email]
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientName: piatto-web
+      GenerateSecret: false
+      ExplicitAuthFlows: [ALLOW_USER_SRP_AUTH, ALLOW_REFRESH_TOKEN_AUTH]
+
+  CustomerGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: customer
+      UserPoolId: !Ref UserPool
+
+  StaffGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: staff
+      UserPoolId: !Ref UserPool
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins: ['*']
+        AllowHeaders: ['authorization','content-type']
+        AllowMethods: [GET,POST,PATCH,DELETE,OPTIONS]
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        Authorizers:
+          CognitoAuthorizer:
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+              audience: [!Ref UserPoolClient]
+            IdentitySource: '$request.header.Authorization'
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: orderId
+          KeyType: HASH
+
+  HoldsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: holdId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: holdId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  MenusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../BackEnd/functions/menus/
+      Handler: index.handler
+      Events:
+        GetMenus:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /menus
+            Method: GET
+            Auth:
+              Authorizer: NONE
+
+  HoldsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../BackEnd/functions/holds/
+      Handler: index.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref HoldsTable
+      Events:
+        CreateHold:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /holds
+            Method: POST
+
+  OrdersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../BackEnd/functions/orders/
+      Handler: index.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        CurrentOrder:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /me/orders/current
+            Method: GET
+        CreateOrder:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /orders
+            Method: POST
+
+  StaffValidateFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../BackEnd/functions/staffValidate/
+      Handler: index.handler
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        ValidateQr:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /staff/qr/validate
+            Method: POST
+
+  StaffDeliverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../BackEnd/functions/staffDeliver/
+      Handler: index.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        Deliver:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /staff/orders/{orderId}/deliver
+            Method: POST
+
+Outputs:
+  ApiUrl:
+    Value: !Sub https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com
+  UserPoolId:
+    Value: !Ref UserPool
+  UserPoolClientId:
+    Value: !Ref UserPoolClient
