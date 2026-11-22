@@ -10,10 +10,11 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "aws-amplify": "^6.22.2",
+    "qrcode.react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "react-router-dom": "latest",
-    "qrcode.react": "latest"
+    "react-router-dom": "latest"
   },
   "devDependencies": {
     "@types/react": "latest",

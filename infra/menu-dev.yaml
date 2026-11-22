@@ -1,0 +1,179 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Piatto - API de menus
+
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, prod]
+
+  LambdaRoleArn:
+    Type: String
+    Description: ARN del rol existente para Lambda
+
+  FrontendOrigin:
+    Type: String
+    Default: http://localhost:5173
+    Description: Origen permitido para el frontend
+
+  UserPoolId:
+    Type: String
+    Default: us-east-1_cVNRkrKBq
+
+  UserPoolClientId:
+    Type: String
+    Default: 79d0uhhqj9n0dmml7urpg1rn3k
+
+Resources:
+  MenusTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub piatto-${Stage}-menus
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: serviceDate
+          AttributeType: S
+        - AttributeName: menuId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: serviceDate
+          KeyType: HASH
+        - AttributeName: menuId
+          KeyType: RANGE
+
+  MenuApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: '$default'
+      Auth:
+        Authorizers:
+          CognitoAuthorizer:
+            IdentitySource: '$request.header.Authorization'
+            JwtConfiguration:
+              issuer: !Sub https://cognito-idp.${AWS::Region}.${AWS::URLSuffix}/${UserPoolId}
+              audience:
+                - !Ref UserPoolClientId
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref FrontendOrigin
+        AllowHeaders:
+          - content-type
+          - authorization
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+
+  MenusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub piatto-${Stage}-get-menus
+      Runtime: nodejs22.x
+      Architectures:
+        - x86_64
+      CodeUri: ../BackEnd/functions/menus/
+      Handler: index.handler
+      Role: !Ref LambdaRoleArn
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          MENUS_TABLE: !Ref MenusTable
+      Events:
+        GetMenus:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MenuApi
+            Path: /menus
+            Method: GET
+
+  HoldsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub piatto-${Stage}-holds
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: holdId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+        - AttributeName: expiresAtEpoch
+          AttributeType: N
+      KeySchema:
+        - AttributeName: holdId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: StatusExpiryIndex
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+            - AttributeName: expiresAtEpoch
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  HoldsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub piatto-${Stage}-create-hold
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      CodeUri: ../BackEnd/functions/holds/
+      Handler: index.handler
+      Role: !Ref LambdaRoleArn
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          MENUS_TABLE: !Ref MenusTable
+          HOLDS_TABLE: !Ref HoldsTable
+      Events:
+        CreateHold:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MenuApi
+            Path: /holds
+            Method: POST
+            Auth:
+              Authorizer: CognitoAuthorizer
+
+  ExpireHoldsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub piatto-${Stage}-expire-holds
+      Runtime: nodejs22.x
+      Architectures: [x86_64]
+      CodeUri: ../BackEnd/functions/expireHolds/
+      Handler: index.handler
+      Role: !Ref LambdaRoleArn
+      Timeout: 60
+      MemorySize: 256
+      Environment:
+        Variables:
+          MENUS_TABLE: !Ref MenusTable
+          HOLDS_TABLE: !Ref HoldsTable
+      Events:
+        EveryMinute:
+          Type: Schedule
+          Properties:
+            Schedule: rate(1 minute)
+            Enabled: true
+
+Outputs:
+  MenusApiUrl:
+    Description: Endpoint para consultar menus
+    Value: !Sub https://${MenuApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/menus
+
+  MenusTableName:
+    Value: !Ref MenusTable
+
+  HoldsApiUrl:
+    Description: Endpoint protegido para separar menus
+    Value: !Sub https://${MenuApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/holds
+
+  HoldsTableName:
+    Value: !Ref HoldsTable

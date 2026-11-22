@@ -1,0 +1,20 @@
+
+# Dependencias y compilaciones
+node_modules/
+dist/
+.aws-sam/
+*.tsbuildinfo
+
+# Configuracion local
+.env
+.env.*
+!.env.example
+
+# Respaldos y paquetes de despliegue
+*.bak
+*.before-*.yaml
+piatto-web.zip
+amplify-deployment.json
+
+# Archivos del sistema
+.DS_Store
